@@ -1,0 +1,77 @@
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stream-cpu-baseline
+  namespace: terizza-benchmarking
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      restartPolicy: Never
+
+      nodeSelector:
+        kubernetes.io/hostname: gpu-18.nrp.mghpcc.org
+
+      containers:
+        - name: stream
+          image: ubuntu:22.04
+          env:
+            - name: K8S_NODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: OMP_NUM_THREADS
+              value: "4"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+
+              apt-get update -qq
+              apt-get install -y -qq gcc curl ca-certificates \
+                > /dev/null
+
+              echo "===== HARDWARE INFORMATION ====="
+              echo "Physical node: $K8S_NODE"
+              grep -m1 'model name' /proc/cpuinfo
+              echo "Available CPUs: $(nproc)"
+              date -u
+              uname -a
+              grep Cpus_allowed_list /proc/self/status || true
+              cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+              gcc --version | head -1
+
+              echo "===== DOWNLOAD STREAM ====="
+              curl -fsSL \
+                https://raw.githubusercontent.com/jeffhammond/STREAM/master/stream.c \
+                -o stream.c
+              sha256sum stream.c
+
+              echo "===== COMPILE STREAM ====="
+              gcc -O3 -march=native -fopenmp \
+                -DSTREAM_ARRAY_SIZE=70000000 \
+                -DNTIMES=20 \
+                stream.c -o stream
+
+              echo "===== BENCHMARK ====="
+              for i in 1 2 3; do
+                echo "===== TRIAL $i ====="
+                ./stream
+              done
+
+              echo "===== CPU THROTTLING ====="
+              cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+
+              echo "===== COMPLETE ====="
+          resources:
+            requests:
+              cpu: "4"
+              memory: "3Gi"
+            limits:
+              cpu: "4"
+              memory: "3Gi"
+

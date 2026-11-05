@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sysbench-baseline-v2
+  namespace: terizza-benchmarking
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sysbench
+          image: ubuntu:22.04
+          env:
+            - name: K8S_NODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq sysbench util-linux > /dev/null
+
+              echo "===== HARDWARE INFORMATION ====="
+              echo "Physical node: $K8S_NODE"
+              echo "Pod: $POD_NAME"
+              echo "CPU model:"
+              awk -F: '/^model name/ {print $2; exit}' /proc/cpuinfo
+              echo "Available CPUs: $(nproc)"
+
+              echo "===== ENVIRONMENT ====="
+              date -u
+              uname -a
+              sysbench --version
+              lscpu | grep -E 'Architecture|Model name|Socket\(s\)|Thread\(s\) per core' || true
+              grep Cpus_allowed_list /proc/self/status || true
+              cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+
+              echo "===== WARMUP ====="
+              sysbench cpu --threads=4 \
+                --cpu-max-prime=10000 \
+                --time=3 run > /dev/null
+
+              echo "===== BENCHMARK RESULTS ====="
+              for i in 1 2 3 4 5; do
+                echo "===== TRIAL $i ====="
+                sysbench cpu \
+                  --threads=4 \
+                  --cpu-max-prime=10000 \
+                  --time=10 run
+              done
+
+              echo "===== CPU THROTTLING STATS ====="
+              cat /sys/fs/cgroup/cpu.stat 2>/dev/null || true
+
+              echo "===== COMPLETE ====="
+          resources:
+            requests:
+              cpu: "4"
+              memory: "1Gi"
+            limits:
+              cpu: "4"
+              memory: "1Gi"

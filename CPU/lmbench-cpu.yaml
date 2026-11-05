@@ -1,0 +1,135 @@
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lmbench-cpu-baseline
+  namespace: terizza-benchmarking
+
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+
+  template:
+    spec:
+      restartPolicy: Never
+
+      nodeSelector:
+        kubernetes.io/hostname: gpu-18.nrp.mghpcc.org
+
+      containers:
+        - name: lmbench-cpu
+          image: ubuntu:22.04
+
+          env:
+            - name: K8S_NODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LC_ALL
+              value: "C"
+
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+
+              echo "===== START ====="
+              date -u
+
+              echo "===== INSTALL LMBENCH ====="
+              apt-get update -qq
+              apt-get install -y -qq \
+                --no-install-recommends \
+                lmbench procps util-linux \
+                > /dev/null
+
+              echo "===== SOFTWARE VERSION ====="
+              dpkg-query -W lmbench
+
+              BIN_DIR=$(dirname "$(find \
+                /usr/lib/lmbench/bin \
+                -type f -name lat_mem_rd \
+                -print -quit)")
+
+              test -x "$BIN_DIR/lat_mem_rd"
+              test -x "$BIN_DIR/lat_ctx"
+              test -x "$BIN_DIR/bw_mem"
+
+              echo "LMbench binaries: $BIN_DIR"
+
+              echo "===== HARDWARE INFORMATION ====="
+              echo "Physical node: $K8S_NODE"
+              grep -m1 'model name' /proc/cpuinfo
+              echo "Available CPUs: $(nproc)"
+              grep Cpus_allowed_list /proc/self/status
+              uname -a
+
+              CPU_ID=$(awk '/Cpus_allowed_list/ {
+                split($2,a,",");
+                split(a[1],b,"-");
+                print b[1]
+              }' /proc/self/status)
+
+              echo "Benchmark pinned to logical CPU: $CPU_ID"
+
+              echo "===== CPU STATS BEFORE ====="
+              cat /sys/fs/cgroup/cpu.stat || true
+              cat /sys/fs/cgroup/memory.events || true
+
+              for run in 1 2 3 4 5; do
+
+                echo "===== RUN $run START ====="
+                date -u
+
+                echo "===== MEMORY LATENCY RUN $run ====="
+                echo "Units: nanoseconds per load"
+                echo "Working sets: 512 B to 256 MB"
+                echo "Stride: 128 bytes"
+
+                taskset -c "$CPU_ID" \
+                  "$BIN_DIR/lat_mem_rd" \
+                  -P 1 -W 1 -N 3 256 128 2>&1
+
+                echo "===== CONTEXT SWITCH RUN $run ====="
+                echo "Units: microseconds"
+                echo "Process counts: 2, 4, 8"
+
+                taskset -c "$CPU_ID" \
+                  "$BIN_DIR/lat_ctx" \
+                  -P 1 -W 1 -N 3 -s 0 2 4 8 2>&1
+
+                echo "===== MEMORY READ BANDWIDTH RUN $run ====="
+                echo "Units: MB/s"
+
+                taskset -c "$CPU_ID" \
+                  "$BIN_DIR/bw_mem" \
+                  -P 1 -W 1 -N 3 128m rd 2>&1
+
+                echo "===== MEMORY COPY BANDWIDTH RUN $run ====="
+
+                taskset -c "$CPU_ID" \
+                  "$BIN_DIR/bw_mem" \
+                  -P 1 -W 1 -N 3 128m cp 2>&1
+
+                echo "===== RUN $run END ====="
+                date -u
+
+              done
+
+              echo "===== CPU STATS AFTER ====="
+              cat /sys/fs/cgroup/cpu.stat || true
+              cat /sys/fs/cgroup/memory.events || true
+
+              echo "===== COMPLETE ====="
+              date -u
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "3Gi"
+            limits:
+              cpu: "4"
+              memory: "3Gi"
+

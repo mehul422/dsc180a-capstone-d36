@@ -1,0 +1,117 @@
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unixbench-cpu-baseline
+  namespace: terizza-benchmarking
+
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+
+  template:
+    spec:
+      restartPolicy: Never
+      priorityClassName: opportunistic
+
+
+      containers:
+        - name: unixbench-cpu
+          image: ubuntu:22.04
+
+          env:
+            - name: K8S_NODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LC_ALL
+              value: "C"
+            - name: LANG
+              value: "C"
+
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+
+              echo "===== START ====="
+              date -u
+
+              echo "===== INSTALL DEPENDENCIES ====="
+              apt-get update -qq
+              apt-get install -y -qq \
+                git build-essential perl procps coreutils \
+                > /dev/null
+
+              echo "===== HARDWARE INFORMATION ====="
+              echo "Node: $K8S_NODE"
+              grep -m1 'model name' /proc/cpuinfo
+              echo "Visible CPUs: $(nproc)"
+              grep Cpus_allowed_list /proc/self/status
+              echo "CPU quota:"
+              cat /sys/fs/cgroup/cpu.max || true
+              uname -a
+
+              echo "===== DOWNLOAD UNIXBENCH 6.0.0 ====="
+              git clone --depth 1 --branch v6.0.0 \
+                https://github.com/kdlucas/byte-unixbench.git \
+                /tmp/byte-unixbench
+
+              cd /tmp/byte-unixbench
+              git describe --tags --always
+              git rev-parse HEAD
+              cd UnixBench
+
+              echo "===== COMPILE ====="
+              make -j8
+
+              echo "===== RESOURCE STATS BEFORE ====="
+              cat /sys/fs/cgroup/cpu.stat || true
+              cat /sys/fs/cgroup/memory.events || true
+              df -h /tmp
+
+              echo "===== UNIXBENCH START ====="
+              date -u
+
+              # Print diagnostic information every five minutes.
+              (
+                while sleep 300; do
+                  echo "===== HEARTBEAT ====="
+                  date -u
+                  echo "CPU usage:"
+                  cat /sys/fs/cgroup/cpu.stat || true
+                  echo "Memory events:"
+                  cat /sys/fs/cgroup/memory.events || true
+                  echo "Processes:"
+                  ps -eo pid,stat,etime,comm \
+                    --sort=-etime | head -20 || true
+                done
+              ) &
+              monitor_pid=$!
+
+              cleanup() {
+                status=$?
+                kill "$monitor_pid" 2>/dev/null || true
+                echo "===== FINAL DIAGNOSTICS ====="
+                date -u
+                cat /sys/fs/cgroup/cpu.stat || true
+                cat /sys/fs/cgroup/memory.events || true
+                echo "UnixBench exit code: $status"
+              }
+              trap cleanup EXIT
+
+              echo "===== RUN 1 AND 72 COPIES ====="
+              stdbuf -oL -eL ./Run -c 1 -c 72
+
+              echo "===== COMPLETE ====="
+
+          resources:
+            requests:
+              cpu: "72"
+              memory: "16Gi"
+            limits:
+              cpu: "72"
+              memory: "16Gi"
+
