@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cs-tpch
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: gpu-18.nrp.mghpcc.org
+  containers:
+  - name: bench
+    image: python:3.12
+    command: ["sleep", "infinity"]
+    resources:
+      requests:
+        cpu: "4"
+        memory: 16Gi
+      limits:
+        cpu: "4"
+        memory: 16Gi
+  restartPolicy: Never
