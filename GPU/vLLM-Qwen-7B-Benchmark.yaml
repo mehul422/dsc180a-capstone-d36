@@ -1,0 +1,17 @@
+# Descriptive copy; benchmark runners use the original JSON configuration.
+# Source: vllm/results/qwen-sweep-20261106T225656Z-48d9ffd2/config.json
+image: "8e31a886fffbd9f39d665bf08df011ef911ae062dcc56000286f07c23600a173"
+models: ["Qwen2.5-7B-Instruct"]
+concurrency: [1, 4, 16, 32, 64]
+input_lengths: [128, 1024]
+output_length: 128
+repetitions: 3
+num_prompts: "max(100, 4 * concurrency)"
+warmups: 5
+dtype: "float16"
+eager: true
+gpu_memory_utilization: 0.2
+max_model_len: 2048
+temperature: 0
+seed: 42
+cell_timeout_seconds: 1800

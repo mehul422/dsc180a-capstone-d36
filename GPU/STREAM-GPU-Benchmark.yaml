@@ -1,0 +1,9 @@
+# Descriptive copy; benchmark runners use the original JSON configuration.
+# Source: stream/config/benchmark.json
+array_size: 33554432
+iterations: 100
+repetitions: 5
+device: 0
+timeout_seconds: 1800
+precision: "double"
+backend: "HIP"
